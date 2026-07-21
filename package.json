@@ -1,0 +1,9 @@
+{
+  "name": "sica",
+  "version": "2.49.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx serve .",
+    "start": "npx serve ."
+  }
+}
