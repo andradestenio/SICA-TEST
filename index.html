@@ -1961,7 +1961,7 @@ body:not(.auth-pending):not(.auth-locked) #loginScreen{
 }
 
 
-/* v2.49 — salvar e editar registro de presença */
+/* v3.0 Cloud Base — salvar e editar registro de presença */
 .attendance-record-actions{
   display:flex;
   justify-content:space-between;
@@ -2007,6 +2007,8 @@ body:not(.auth-pending):not(.auth-locked) #loginScreen{
 }
 
 </style>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="auth-pending">
 
@@ -2044,10 +2046,10 @@ body:not(.auth-pending):not(.auth-locked) #loginScreen{
 
           <form id="loginForm" class="login-form" onsubmit="handleLocalLogin(event)">
             <div class="login-field">
-              <label for="loginUsername">Usuário</label>
+              <label for="loginUsername">E-mail</label>
               <div class="login-input-wrap">
                 <span class="login-input-icon" aria-hidden="true">U</span>
-                <input id="loginUsername" type="text" autocomplete="username" required placeholder="Digite seu usuário">
+                <input id="loginUsername" type="email" autocomplete="email" required placeholder="Digite seu e-mail">
               </div>
             </div>
 
@@ -2085,10 +2087,16 @@ body:not(.auth-pending):not(.auth-locked) #loginScreen{
 
           <form id="setupForm" class="login-form" onsubmit="handleAccountSetup(event)">
             <div class="login-field">
-              <label for="setupUsername">Usuário</label>
+              <label for="setupUsername">Nome completo</label>
               <div class="login-input-wrap">
                 <span class="login-input-icon" aria-hidden="true">U</span>
-                <input id="setupUsername" type="text" autocomplete="username" minlength="3" required placeholder="Escolha um usuário">
+                <input id="setupUsername" type="text" autocomplete="name" minlength="3" required placeholder="Digite seu nome completo">
+              </div>
+            </div>
+            <div class="login-field">
+              <label for="setupEmail">E-mail</label>
+              <div class="login-input-wrap">
+                <input id="setupEmail" type="email" autocomplete="email" required placeholder="Digite seu e-mail">
               </div>
             </div>
 
@@ -2131,7 +2139,7 @@ body:not(.auth-pending):not(.auth-locked) #loginScreen{
         </div>
 
         <div class="login-security-note">
-          <strong>Acesso local</strong>
+          <strong>SICA Cloud</strong>
           <span>Este login protege o acesso no navegador, mas não substitui autenticação por servidor em ambientes públicos.</span>
         </div>
       </div>
@@ -7553,448 +7561,193 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 </script>
 
-<script id="local-auth-v248">
+<script id="sica-cloud-auth-v300">
 (function(){
-  const ACCOUNTS_KEY='sica_local_accounts_v2';
-  const LEGACY_ACCOUNT_KEY='controle_academico_local_account_v1';
-  const SESSION_KEY='sica_local_session_v2';
-  let setupPhotoData='';
+  'use strict';
+  const SUPABASE_URL='https://ctbjpjffwkmhbdlncoxg.supabase.co';
+  const SUPABASE_PUBLISHABLE_KEY='sb_publishable_X8zPeQD5xC5x8wkwDs_Ofg_ikViYIX6';
+  const sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,{
+    auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}
+  });
+  window.sicaSupabase=sb;
+  let activeUser=null;
+  let activeProfile=null;
 
-  function readAccounts(){
-    try{
-      const raw=localStorage.getItem(ACCOUNTS_KEY);
-      if(raw){
-        const parsed=JSON.parse(raw);
-        return Array.isArray(parsed)?parsed:[];
-      }
-
-      const legacyRaw=localStorage.getItem(LEGACY_ACCOUNT_KEY);
-      if(legacyRaw){
-        const legacy=JSON.parse(legacyRaw);
-        const migrated=[{
-          id:String(Date.now()),
-          username:legacy.username,
-          usernameNormalized:legacy.usernameNormalized||String(legacy.username||'').toLocaleLowerCase('pt-BR'),
-          passwordHash:legacy.passwordHash,
-          photo:'',
-          role:'admin',
-          status:'approved',
-          createdAt:legacy.createdAt||new Date().toISOString(),
-          approvedAt:new Date().toISOString()
-        }];
-        saveAccounts(migrated);
-        return migrated;
-      }
-      return [];
-    }catch(error){
-      console.error(error);
-      return [];
-    }
+  function profileValue(profile,names,fallback=''){
+    for(const name of names)if(profile&&profile[name]!==undefined&&profile[name]!==null)return profile[name];
+    return fallback;
   }
-
-  function saveAccounts(accounts){
-    localStorage.setItem(ACCOUNTS_KEY,JSON.stringify(accounts));
-  }
-
-  function getSession(){
-    try{
-      const raw=sessionStorage.getItem(SESSION_KEY)||localStorage.getItem(SESSION_KEY);
-      return raw?JSON.parse(raw):null;
-    }catch(error){
-      return null;
-    }
-  }
-
-  function saveSession(account,remember){
-    const session={accountId:account.id,username:account.username,role:account.role};
-    sessionStorage.setItem(SESSION_KEY,JSON.stringify(session));
-    if(remember)localStorage.setItem(SESSION_KEY,JSON.stringify(session));
-    else localStorage.removeItem(SESSION_KEY);
-  }
-
-  function clearSession(){
-    sessionStorage.removeItem(SESSION_KEY);
-    localStorage.removeItem(SESSION_KEY);
-  }
-
-  function currentAccount(){
-    const session=getSession();
-    if(!session)return null;
-    return readAccounts().find(account=>account.id===session.accountId&&account.status==='approved')||null;
-  }
-
-  function canAccessManagement(account=currentAccount()){
-    return Boolean(account&&account.status==='approved'&&(account.role==='admin'||account.role==='professor'));
-  }
-
-  function canManageAccounts(account=currentAccount()){
-    return Boolean(account&&account.status==='approved'&&account.role==='admin');
-  }
-
-  async function hashLocalPassword(value){
-    if(!window.crypto||!window.crypto.subtle){
-      throw new Error('Este navegador não oferece suporte ao mecanismo de segurança necessário.');
-    }
-    const data=new TextEncoder().encode(String(value));
-    const hash=await crypto.subtle.digest('SHA-256',data);
-    return Array.from(new Uint8Array(hash))
-      .map(byte=>byte.toString(16).padStart(2,'0'))
-      .join('');
-  }
+  function normalizedRole(profile){return String(profileValue(profile,['role','papel','tipo'],'user')).toLowerCase()}
+  function normalizedStatus(profile){return String(profileValue(profile,['status','situacao'],'pending')).toLowerCase()}
+  function isApproved(profile){return ['approved','aprovado','ativa','ativo'].includes(normalizedStatus(profile))}
+  function isAdmin(profile){return ['admin','administrador'].includes(normalizedRole(profile))}
+  function isProfessor(profile){return ['professor','teacher'].includes(normalizedRole(profile))}
+  function canAccessManagement(){return isApproved(activeProfile)&&(isAdmin(activeProfile)||isProfessor(activeProfile))}
+  function canManageAccounts(){return isApproved(activeProfile)&&isAdmin(activeProfile)}
 
   function setAuthMessage(id,message,type='error'){
-    const element=document.getElementById(id);
-    if(!element)return;
+    const element=document.getElementById(id); if(!element)return;
     element.textContent=message||'';
     element.className=`login-message${message?' show':''}${message?` ${type}`:''}`;
   }
-
   function lockApplication(){
-    document.body.classList.remove('auth-pending');
-    document.body.classList.add('auth-locked');
+    document.body.classList.remove('auth-pending');document.body.classList.add('auth-locked');
     document.getElementById('loginScreen')?.removeAttribute('aria-hidden');
   }
-
-  function updateAdminVisibility(){
-    const account=currentAccount();
-    const button=document.getElementById('accessManagementNavButton');
-    if(button)button.classList.toggle('hidden',!canAccessManagement(account));
-  }
-
-
-  function guardAccessManagementRoute(){
-    const account=currentAccount();
-    const requested=(location.hash||'').replace(/^#/,'');
-    if(requested==='accessManagement'&&!canAccessManagement(account)){
-      location.hash='dashboard';
-      navigateToScreen?.('dashboard',{updateHash:false});
-    }
-  }
-
   function unlockApplication(){
     document.body.classList.remove('auth-pending','auth-locked');
     document.getElementById('loginScreen')?.setAttribute('aria-hidden','true');
-    document.getElementById('loginPassword').value='';
-    updateAdminVisibility();
-    guardAccessManagementRoute();
-    renderAccessManagement();
-    closeMobileMenu?.();
+    const p=document.getElementById('loginPassword');if(p)p.value='';
+    updateAdminVisibility();guardAccessManagementRoute();renderAccessManagement();closeMobileMenu?.();
+    offerLocalDataProtection();
   }
-
+  function updateAdminVisibility(){
+    document.getElementById('accessManagementNavButton')?.classList.toggle('hidden',!canAccessManagement());
+  }
+  function guardAccessManagementRoute(){
+    const requested=(location.hash||'').replace(/^#/,'');
+    if(requested==='accessManagement'&&!canAccessManagement())location.hash='dashboard';
+  }
   window.showAccountSetup=function(){
     document.getElementById('loginModeContent')?.classList.add('hidden');
     document.getElementById('setupModeContent')?.classList.remove('hidden');
-    setAuthMessage('loginMessage','');
-    setupPhotoData='';
-    const preview=document.getElementById('setupPhotoPreview');
-    if(preview)preview.textContent='Foto';
-    setTimeout(()=>document.getElementById('setupUsername')?.focus(),50);
+    setAuthMessage('loginMessage','');setTimeout(()=>document.getElementById('setupUsername')?.focus(),50);
   };
-
   window.showLoginMode=function(){
     document.getElementById('setupModeContent')?.classList.add('hidden');
     document.getElementById('loginModeContent')?.classList.remove('hidden');
-    setAuthMessage('setupMessage','');
-    setTimeout(()=>document.getElementById('loginUsername')?.focus(),50);
+    setAuthMessage('setupMessage','');setTimeout(()=>document.getElementById('loginUsername')?.focus(),50);
   };
-
   window.toggleLoginPassword=function(inputId,button){
-    const input=document.getElementById(inputId);
-    if(!input)return;
-    const show=input.type==='password';
-    input.type=show?'text':'password';
-    if(button){
-      button.textContent=show?'Ocultar':'Mostrar';
-      button.setAttribute('aria-label',show?'Ocultar senha':'Mostrar senha');
-    }
+    const input=document.getElementById(inputId);if(!input)return;
+    const show=input.type==='password';input.type=show?'text':'password';
+    if(button){button.textContent=show?'Ocultar':'Mostrar';button.setAttribute('aria-label',show?'Ocultar senha':'Mostrar senha')}
   };
+  window.previewSetupPhoto=function(){};
 
-  window.previewSetupPhoto=function(event){
-    const file=event.target.files?.[0];
-    const preview=document.getElementById('setupPhotoPreview');
-    setupPhotoData='';
-    if(!file){
-      if(preview)preview.textContent='Foto';
-      return;
-    }
-    if(!file.type.startsWith('image/')){
-      event.target.value='';
-      setAuthMessage('setupMessage','Selecione um arquivo de imagem válido.');
-      return;
-    }
-    if(file.size>2*1024*1024){
-      event.target.value='';
-      setAuthMessage('setupMessage','A imagem deve ter no máximo 2 MB.');
-      return;
-    }
-    const reader=new FileReader();
-    reader.onload=()=>{
-      setupPhotoData=String(reader.result||'');
-      if(preview)preview.innerHTML=`<img src="${setupPhotoData}" alt="Prévia da foto">`;
-    };
-    reader.readAsDataURL(file);
-  };
+  async function loadProfile(user){
+    const {data,error}=await sb.from('profiles').select('*').eq('id',user.id).maybeSingle();
+    if(error)throw error;
+    return data;
+  }
+  async function refreshIdentity(user){activeUser=user;activeProfile=user?await loadProfile(user):null;}
 
   window.handleAccountSetup=async function(event){
     event.preventDefault();
-    const username=document.getElementById('setupUsername').value.trim();
+    const name=document.getElementById('setupUsername').value.trim();
+    const email=document.getElementById('setupEmail')?.value.trim();
     const password=document.getElementById('setupPassword').value;
     const confirmation=document.getElementById('setupPasswordConfirm').value;
     const button=document.getElementById('setupSubmitButton');
-    const accounts=readAccounts();
-    const normalized=username.toLocaleLowerCase('pt-BR');
-
     setAuthMessage('setupMessage','');
-
-    if(username.length<3){
-      setAuthMessage('setupMessage','O usuário deve ter pelo menos 3 caracteres.');
-      return;
-    }
-    if(accounts.some(account=>account.usernameNormalized===normalized)){
-      setAuthMessage('setupMessage','Este nome de usuário já está cadastrado.');
-      return;
-    }
-    if(password.length<6){
-      setAuthMessage('setupMessage','A senha deve ter pelo menos 6 caracteres.');
-      return;
-    }
-    if(password!==confirmation){
-      setAuthMessage('setupMessage','As senhas informadas não coincidem.');
-      return;
-    }
-
+    if(name.length<3)return setAuthMessage('setupMessage','Informe seu nome completo.');
+    if(!email)return setAuthMessage('setupMessage','Informe um e-mail válido.');
+    if(password.length<6)return setAuthMessage('setupMessage','A senha deve ter pelo menos 6 caracteres.');
+    if(password!==confirmation)return setAuthMessage('setupMessage','As senhas informadas não coincidem.');
     try{
-      button.disabled=true;
-      button.textContent='Enviando cadastro...';
-      const passwordHash=await hashLocalPassword(password);
-      const firstAccount=accounts.length===0;
-      const newAccount={
-        id:String(Date.now())+Math.random().toString(16).slice(2),
-        username,
-        usernameNormalized:normalized,
-        passwordHash,
-        photo:setupPhotoData||'',
-        role:firstAccount?'admin':'user',
-        status:firstAccount?'approved':'pending',
-        createdAt:new Date().toISOString(),
-        approvedAt:firstAccount?new Date().toISOString():''
-      };
-      accounts.push(newAccount);
-      saveAccounts(accounts);
-
-      document.getElementById('loginUsername').value=username;
-      document.getElementById('setupForm').reset();
-      setupPhotoData='';
-      showLoginMode();
-
-      setAuthMessage(
-        'loginMessage',
-        firstAccount
-          ?'Administrador inicial criado. Informe sua senha para entrar.'
-          :'Cadastro enviado. Aguarde a aprovação de um administrador.',
-        'success'
-      );
-    }catch(error){
-      console.error(error);
-      setAuthMessage('setupMessage',error.message||'Não foi possível criar o acesso.');
-    }finally{
-      button.disabled=false;
-      button.textContent='Criar acesso';
-    }
+      button.disabled=true;button.textContent='Criando acesso...';
+      const {data,error}=await sb.auth.signUp({email,password,options:{data:{nome:name,full_name:name}}});
+      if(error)throw error;
+      document.getElementById('loginUsername').value=email;
+      document.getElementById('setupForm').reset();showLoginMode();
+      setAuthMessage('loginMessage',data.session?'Conta criada. Validando acesso...':'Conta criada. Verifique seu e-mail caso a confirmação esteja habilitada.','success');
+      if(data.session)await handleAuthenticatedSession(data.session);
+    }catch(error){console.error(error);setAuthMessage('setupMessage',translateAuthError(error));}
+    finally{button.disabled=false;button.textContent='Criar acesso';}
   };
 
   window.handleLocalLogin=async function(event){
     event.preventDefault();
-    const username=document.getElementById('loginUsername').value.trim();
+    const email=document.getElementById('loginUsername').value.trim();
     const password=document.getElementById('loginPassword').value;
-    const remember=document.getElementById('loginRemember').checked;
-    const button=document.getElementById('loginSubmitButton');
-    const account=readAccounts().find(item=>item.usernameNormalized===username.toLocaleLowerCase('pt-BR'));
-
-    setAuthMessage('loginMessage','');
-
-    if(!account){
-      setAuthMessage('loginMessage','Usuário ou senha incorretos.');
-      return;
-    }
-    if(account.status==='pending'){
-      setAuthMessage('loginMessage','Seu acesso ainda está aguardando aprovação.');
-      return;
-    }
-
+    const button=document.getElementById('loginSubmitButton');setAuthMessage('loginMessage','');
     try{
-      button.disabled=true;
-      button.textContent='Verificando...';
-      const passwordHash=await hashLocalPassword(password);
-      if(passwordHash!==account.passwordHash){
-        setAuthMessage('loginMessage','Usuário ou senha incorretos.');
-        return;
-      }
-      saveSession(account,remember);
-      unlockApplication();
-    }catch(error){
-      console.error(error);
-      setAuthMessage('loginMessage',error.message||'Não foi possível realizar o login.');
-    }finally{
-      button.disabled=false;
-      button.textContent='Entrar';
-    }
+      button.disabled=true;button.textContent='Entrando...';
+      const {data,error}=await sb.auth.signInWithPassword({email,password});if(error)throw error;
+      await handleAuthenticatedSession(data.session);
+    }catch(error){console.error(error);setAuthMessage('loginMessage',translateAuthError(error));}
+    finally{button.disabled=false;button.textContent='Entrar';}
   };
 
-  window.logoutLocalAccount=function(){
-    clearSession();
-    closeMobileMenu?.();
-    lockApplication();
-    showLoginMode();
+  async function handleAuthenticatedSession(session){
+    if(!session?.user){lockApplication();return;}
+    await refreshIdentity(session.user);
+    if(!activeProfile){await sb.auth.signOut();lockApplication();return setAuthMessage('loginMessage','Perfil não encontrado. Contate o administrador.');}
+    if(!isApproved(activeProfile)){
+      await sb.auth.signOut();lockApplication();showLoginMode();
+      return setAuthMessage('loginMessage','Seu cadastro foi recebido e está aguardando aprovação do administrador.');
+    }
+    unlockApplication();
+  }
+  function translateAuthError(error){
+    const msg=String(error?.message||'');
+    if(/invalid login credentials/i.test(msg))return 'E-mail ou senha incorretos.';
+    if(/email not confirmed/i.test(msg))return 'Confirme seu e-mail antes de entrar.';
+    if(/already registered|already been registered/i.test(msg))return 'Este e-mail já está cadastrado.';
+    return msg||'Não foi possível concluir a operação.';
+  }
+  window.logoutLocalAccount=async function(){
+    await sb.auth.signOut();activeUser=null;activeProfile=null;closeMobileMenu?.();lockApplication();showLoginMode();
     setAuthMessage('loginMessage','Sessão encerrada com segurança.','success');
   };
 
-  function accountInitials(name){
-    return String(name||'U').split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase();
+  function profileName(p){return profileValue(p,['nome','name','full_name','email'],'Usuário')}
+  function profileEmail(p){return profileValue(p,['email'],'')}
+  function accountInitials(name){return String(name||'U').split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase()}
+  async function updateProfile(id,patch){
+    if(!canManageAccounts())return;
+    const {error}=await sb.from('profiles').update(patch).eq('id',id);if(error){alert(error.message);return;}await renderAccessManagement();
   }
+  window.approveAccessAccount=id=>updateProfile(id,{status:'approved'});
+  window.rejectAccessAccount=id=>updateProfile(id,{status:'rejected'});
+  window.removeAccessAccount=id=>updateProfile(id,{status:'rejected'});
+  window.setAccessAccountRole=(id,role)=>updateProfile(id,{role});
+  window.toggleAccountRole=async id=>updateProfile(id,{role:'admin'});
 
-  window.approveAccessAccount=function(id){
-    const admin=currentAccount();
-    if(!canManageAccounts(admin))return;
-    const accounts=readAccounts();
-    const account=accounts.find(item=>item.id===id);
-    if(!account)return;
-    account.status='approved';
-    account.approvedAt=new Date().toISOString();
-    saveAccounts(accounts);
-    renderAccessManagement();
-  };
-
-  window.rejectAccessAccount=function(id){
-    const admin=currentAccount();
-    if(!canManageAccounts(admin))return;
-    const accounts=readAccounts().filter(item=>item.id!==id);
-    saveAccounts(accounts);
-    renderAccessManagement();
-  };
-
-  window.removeAccessAccount=function(id){
-    const admin=currentAccount();
-    if(!canManageAccounts(admin)||admin.id===id){
-      alert('O administrador conectado não pode remover o próprio acesso.');
-      return;
-    }
-    if(!confirm('Remover permanentemente este acesso?'))return;
-    saveAccounts(readAccounts().filter(item=>item.id!==id));
-    renderAccessManagement();
-  };
-
-
-  window.setAccessAccountRole=function(id,role){
-    const admin=currentAccount();
-    if(!canManageAccounts(admin)||admin.id===id)return;
-    if(!['admin','professor','user'].includes(role))return;
-    const accounts=readAccounts();
-    const account=accounts.find(item=>item.id===id);
-    if(!account||account.status!=='approved')return;
-    account.role=role;
-    saveAccounts(accounts);
-    renderAccessManagement();
-  };
-
-  window.toggleAccountRole=function(id){
-    const admin=currentAccount();
-    if(!canManageAccounts(admin)||admin.id===id)return;
-    const accounts=readAccounts();
-    const account=accounts.find(item=>item.id===id);
-    if(!account||account.status!=='approved')return;
-    account.role=account.role==='admin'?'user':'admin';
-    saveAccounts(accounts);
-    renderAccessManagement();
-  };
-
-  window.renderAccessManagement=function(){
-    const admin=currentAccount();
-    const list=document.getElementById('accessManagementList');
-    if(!list)return;
-
-    if(!canAccessManagement(admin)){
-      list.innerHTML='<div class="access-empty">Área disponível apenas para administradores e professores.</div>';
-      return;
-    }
-
-    const accounts=readAccounts().sort((a,b)=>
-      (a.status==='pending'?0:1)-(b.status==='pending'?0:1)||
-      String(a.username).localeCompare(String(b.username),'pt-BR',{sensitivity:'base'})
-    );
-
-    document.getElementById('accessPendingCount').textContent=accounts.filter(a=>a.status==='pending').length;
-    document.getElementById('accessApprovedCount').textContent=accounts.filter(a=>a.status==='approved').length;
-    document.getElementById('accessAdminCount').textContent=accounts.filter(a=>a.role==='admin'&&a.status==='approved').length;
-
-    list.innerHTML=accounts.map(account=>{
-      const avatar=account.photo
-        ?`<img src="${account.photo}" alt="Foto de ${escapeHtml(account.username)}">`
-        :escapeHtml(accountInitials(account.username));
-      const statusClass=account.status==='approved'?'approved':'pending';
-      const statusLabel=account.status==='approved'?'Aprovado':'Aguardando aprovação';
-
-      let actions='';
-      if(canManageAccounts(admin)){
-        if(account.status==='pending'){
-          actions=`
-            <button class="action-edit" onclick="approveAccessAccount('${account.id}')">Aprovar</button>
-            <button class="action-delete" onclick="rejectAccessAccount('${account.id}')">Rejeitar</button>`;
-        }else if(account.id!==admin.id){
-          actions=`
-            <button class="secondary" onclick="setAccessAccountRole('${account.id}','professor')">Professor</button>
-            <button class="secondary" onclick="setAccessAccountRole('${account.id}','admin')">Administrador</button>
-            <button class="secondary" onclick="setAccessAccountRole('${account.id}','user')">Usuário</button>
-            <button class="action-delete" onclick="removeAccessAccount('${account.id}')">Remover</button>`;
-        }else{
-          actions='<span class="access-status admin">Conta atual</span>';
-        }
-      }else{
-        actions='<span class="access-status approved">Somente visualização</span>';
-      }
-
-      return `<article class="access-user-card">
-        <div class="access-user-avatar">${avatar}</div>
-        <div class="access-user-info">
-          <strong>${escapeHtml(account.username)}</strong>
-          <small>Cadastrado em ${new Date(account.createdAt).toLocaleString('pt-BR')}</small>
-          <div class="access-user-meta">
-            <span class="access-status ${statusClass}">${statusLabel}</span>
-            ${account.role==='admin'?'<span class="access-status admin">Administrador</span>':account.role==='professor'?'<span class="access-status admin">Professor</span>':''}
-          </div>
-        </div>
-        <div class="access-user-actions">${actions}</div>
-      </article>`;
+  window.renderAccessManagement=async function(){
+    const list=document.getElementById('accessManagementList');if(!list)return;
+    if(!canAccessManagement()){list.innerHTML='<div class="access-empty">Área disponível apenas para administradores e professores.</div>';return;}
+    const {data:profiles,error}=await sb.from('profiles').select('*').order('created_at',{ascending:true});
+    if(error){list.innerHTML=`<div class="access-empty">${escapeHtml(error.message)}</div>`;return;}
+    const rows=profiles||[];
+    document.getElementById('accessPendingCount').textContent=rows.filter(p=>!isApproved(p)).length;
+    document.getElementById('accessApprovedCount').textContent=rows.filter(isApproved).length;
+    document.getElementById('accessAdminCount').textContent=rows.filter(p=>isApproved(p)&&isAdmin(p)).length;
+    list.innerHTML=rows.map(p=>{
+      const name=profileName(p), status=isApproved(p)?'approved':'pending';
+      const actions=canManageAccounts()&&p.id!==activeUser?.id
+        ?(!isApproved(p)?`<button class="action-edit" onclick="approveAccessAccount('${p.id}')">Aprovar</button><button class="action-delete" onclick="rejectAccessAccount('${p.id}')">Rejeitar</button>`
+        :`<button class="secondary" onclick="setAccessAccountRole('${p.id}','professor')">Professor</button><button class="secondary" onclick="setAccessAccountRole('${p.id}','admin')">Administrador</button><button class="secondary" onclick="setAccessAccountRole('${p.id}','user')">Usuário</button>`)
+        :'<span class="access-status approved">Somente visualização</span>';
+      return `<article class="access-user-card"><div class="access-user-avatar">${escapeHtml(accountInitials(name))}</div><div class="access-user-info"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(profileEmail(p))}</small><div class="access-user-meta"><span class="access-status ${status}">${isApproved(p)?'Aprovado':'Aguardando aprovação'}</span><span class="access-status admin">${escapeHtml(normalizedRole(p))}</span></div></div><div class="access-user-actions">${actions}</div></article>`;
     }).join('')||'<div class="access-empty">Nenhum usuário cadastrado.</div>';
   };
 
-  function initializeLocalAuthentication(){
-    const account=currentAccount();
-    if(account){
-      unlockApplication();
-      return;
-    }
+  function localAcademicKeys(){return Object.keys(localStorage).filter(k=>/^(marc_|dashboard_|weekly_|controle_academico_)/.test(k));}
+  function offerLocalDataProtection(){
+    const keys=localAcademicKeys();
+    if(!keys.length||sessionStorage.getItem('sica_cloud_backup_notice'))return;
+    sessionStorage.setItem('sica_cloud_backup_notice','1');
+    setTimeout(()=>{
+      if(confirm(`O SICA Cloud encontrou ${keys.length} conjunto(s) de dados locais. Eles continuam preservados neste navegador. Deseja baixar agora uma cópia de segurança antes da migração para as tabelas em nuvem?`))window.exportSicaLocalBackup();
+    },700);
+  }
+  window.exportSicaLocalBackup=function(){
+    const storage={};for(const key of Object.keys(localStorage))storage[key]=localStorage.getItem(key);
+    const blob=new Blob([JSON.stringify({format:'sica-local-backup',version:'3.0-cloud-base',exportedAt:new Date().toISOString(),storage},null,2)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`sica-backup-local-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  };
 
-    clearSession();
+  async function initializeCloudAuthentication(){
     lockApplication();
-    const accounts=readAccounts();
-
-    if(!accounts.length){
-      showAccountSetup();
-    }else{
-      showLoginMode();
-      setTimeout(()=>document.getElementById('loginUsername')?.focus(),80);
-    }
+    const {data:{session}}=await sb.auth.getSession();
+    if(session){try{await handleAuthenticatedSession(session);return}catch(e){console.error(e);}}
+    showLoginMode();
   }
-
-  if(document.readyState==='loading'){
-    document.addEventListener('DOMContentLoaded',initializeLocalAuthentication,{once:true});
-  }else{
-    initializeLocalAuthentication();
-  }
-})();
-
+  sb.auth.onAuthStateChange((event,session)=>{if(event==='SIGNED_OUT'){activeUser=null;activeProfile=null;lockApplication();}});
   window.addEventListener('hashchange',guardAccessManagementRoute);
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initializeCloudAuthentication,{once:true});else initializeCloudAuthentication();
+})();
 </script>
 
 </body>
